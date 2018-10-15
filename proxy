@@ -1,0 +1,30 @@
+#!/usr/bin/env python
+# encoding: utf-8
+
+
+from socket import socket, AF_INET, SOCK_STREAM
+import sys,time,select
+
+if __name__ == '__main__':
+	listenPort=int(sys.argv[1])		#11000
+	fakeIp=sys.argv[2]		#127.0.0.1(localhost)
+	serverIp=sys.argv[3]		#127.0.0.1(localhost)
+# 	serverName = 'localhost'
+	serverPort = 8080       #The server port number
+	proxyPort = 11000       #The proxy port number
+	proxyAsServerSocket = socket(AF_INET,SOCK_STREAM)		#create listening socket
+	proxyAsServerSocket.bind(('',listenPort))		#bind the listen socket to receive traffic to the specified port regardless of the IP address
+	proxyAsServerSocket.listen(1)		#setup listening
+	print 'The proxy is ready to receive'
+	while True:
+		proxyAsClientSocket = socket(AF_INET, SOCK_STREAM)		#create connection socket
+		proxyAsClientSocket.connect((serverIp,serverPort))		#connect to server				
+		connectionWithClientSocket, addr = proxyAsServerSocket.accept()		#return connection socket
+		inputFromClient = connectionWithClientSocket.recv(8192)		#receive message from client
+		proxyAsClientSocket.send(inputFromClient)		#forward message from client to server
+		print("get input: " + inputFromClient + " from client and forward it to server")		#print out message from client to server on screen
+		resultFromServer = proxyAsClientSocket.recv(8192)		#receive message from server
+		connectionWithClientSocket.send(resultFromServer)		#forward message from server to client
+		print("get result: " + resultFromServer + " from server and forward it to client")		#print out message from server to client on screen
+		connectionWithClientSocket.close()		#close the connection with client
+		proxyAsClientSocket.close()			#close the connection with server
