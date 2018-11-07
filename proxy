@@ -4,25 +4,26 @@
 from socket import socket, AF_INET, SOCK_STREAM
 import sys, time, select, thread, re
 
+
 class Proxy:
     def __init__(self, proxyAsServerSocket, logPath, alpha, fakeIp, serverIp):
-        self.logFile = open(logPath, 'w+')
-        self.alpha = alpha
-        self.serverIp = serverIp
-        self.serverPort = 8080		#The server port number
-        # self.ts=0
-        self.bitrate = ''
-        self.chunkName = ''
-        self.chunkSizeB = 0
-		self.T_current = 100
+        self.logFile = open(logPath, 'w+')  # create a file object to wirte log
+        self.alpha = alpha  # passing the parameter alpha
+        self.serverIp = serverIp  # passing the parameter server IP
+        self.serverPort = 8080  # set the server Port
+        self.bitrate = ''  # initialize bitrate
+        self.chunkName = ''  # initialize chunk name
+        self.chunkSizeB = 0  # initialize chunksize B
+        self.availableBitrate = []  # initialize available bitrate
         self.proxyAsClientSocket = socket(AF_INET, SOCK_STREAM)  # create connection socket
-        self.proxyAsClientSocket.bind((fakeIp, 0))
+        self.proxyAsClientSocket.bind((fakeIp, 0))  # bind it with fake IP
         self.proxyAsClientSocket.connect((self.serverIp, self.serverPort))  # connect to server
         self.connectionWithClientSocket, addr = proxyAsServerSocket.accept()  # connect to client
 
     def start(self):
+        self.T_current = 0
         inputs = [self.connectionWithClientSocket, self.proxyAsClientSocket]  # inputs for select
-        outputs = []
+        outputs = []                                                           # outputs for select
         while True:
             readable, writable, exceptional = select.select(inputs, outputs, inputs, 3)  # select usable socket
             if exceptional:
@@ -32,32 +33,53 @@ class Proxy:
                 if message:  # if message is not empty
                     if s is self.connectionWithClientSocket:  # message is request
                         self.ts = time.time()
-                        bitrateObject = re.search(r'/vod/(\d*)Seg', message, flags=0)
-                        if bitrateObject is not None:
-                            self.bitrate = bitrateObject.group()
-                        chunkNameObject = re.search(r'/vod/\d*Seg\d*-Frag\d*', message, flags=0)
-                        if chunkNameObject is not None:
-                            self.chunkName = chunkNameObject.group()
-                        bigBuckBunnyObjext = re.search(r'big_buck_bunny.f4m', message, flags=0)
+                        bigBuckBunnyObjext = re.search(r'.f4m', message, flags=0)
                         if bigBuckBunnyObjext is not None:
+                            self.proxyAsClientSocket.send(message)  # send request to server
+                            manifest = self.proxyAsClientSocket.recv(8192)
+                            if manifest:
+                                self.availableBitrate = re.findall(r'bitrate="(\d*)"', manifest)
                             message.decode()
                             re.sub('bunny', 'bunny_nolist', message)
                             message.encode()
+                        bitrateObject = re.search(r'/vod/(\d*)Seg', message, flags=0)
+                        if bitrateObject is not None:
+                            # self.bitrate=bitrateObject.group()
+                            if self.availableBitrate:
+                                message.decode()
+                                re.sub(r'/vod/(\d*)Seg', '/vod/' + self.availableBitrate[0] + 'Seg', message)
+                                message.encode()
+                                self.bitrate = self.availableBitrate[0]
+                                self.T_current = float(self.availableBitrate[0])
+                                for i in self.availableBitrate:
+                                    if self.T_current / 1.5 >= float(i):
+                                        message.decode()
+                                        re.sub(r'/vod/(\d*)Seg', '/vod/' + i + 'Seg', message)
+                                        message.encode()
+                                        self.bitrate = i
+                        chunkNameObject = re.search(r'/vod/\d*Seg\d*-Frag\d*', message, flags=0)
+                        if chunkNameObject is not None:
+                            self.chunkName = chunkNameObject.group()
                         self.proxyAsClientSocket.send(message)  # send request to server
+
                     if s is self.proxyAsClientSocket:  # message is response
                         # try:
                         self.tf = time.time()
                         self.duration = self.tf - self.ts
-                        chunkSizeBObjext = re.search(b'Content-Length: \d*', message, flags=0)
+                        chunkSizeBObjext = re.search(b'Content-Length: (\d*)', message, flags=0)
                         if chunkSizeBObjext is not None:
-                            self.chunkSizeB = float(chunkSizeBObjext.group()[16:])
-                        self.T_new = 8 * self.chunkSizeB / (self.tf - self.ts) / 1024
-                        self.T_current = self.alpha * self.T_new + (1 - self.alpha) * self.T_current
-                        print('%d %f %d %f %s %s %s \n' % (
-                        time.time(), self.duration, self.T_new, self.T_current, self.bitrate, self.serverIp,
-                        self.chunkName))
-                        # self.logFile.write('%d %f %d %f %s %s %s \n' % (time.time(),self.duration,self.T_new,self.T_current,self.bitrate,self.serverIp,self.chunkName))
+                            self.chunkSizeB = float(chunkSizeBObjext.group(1))
+                            self.T_new = 8 * self.chunkSizeB / (self.tf - self.ts) / 1024
+                            self.T_current = self.alpha * self.T_new + (1 - self.alpha) * self.T_current
+                            if self.bitrate and self.chunkName:
+                                print('%d %f %d %f %s %s %s\n' % (
+                                time.time(), self.duration, self.T_new, self.T_current, self.bitrate, self.serverIp,
+                                self.chunkName))
+                                self.logFile.write('%d %f %d %f %s %s %s\n' % (
+                                time.time(), self.duration, self.T_new, self.T_current, self.bitrate, self.serverIp,
+                                self.chunkName))
                         self.connectionWithClientSocket.send(message)  # send message to client
+
                 else:
                     break
         self.connectionWithClientSocket.close()  # close the connection with client
@@ -75,6 +97,7 @@ if __name__ == '__main__':
     proxyAsServerSocket.bind(('',listenPort))  # bind the listen socket to receive traffic to the specified port regardless of the IP address
     proxyAsServerSocket.listen(1)  # setup listening
     print("The proxy is ready to receive")
+
     while True:
         try:
             thread.start_new_thread(Proxy(proxyAsServerSocket, logPath, alpha, fakeIp, serverIp).start, ())
